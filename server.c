@@ -56,7 +56,6 @@ void reset_request(request * reqP) {
 
 int main(int argc, char** argv) {
 
-    printf("hello");
     // Parse args.
     if (argc != 2) {
         fprintf(stderr, "usage: %s [port]\n", argv[0]);
