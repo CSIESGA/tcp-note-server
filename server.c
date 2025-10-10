@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
 
             // parse command
             if (req.buffer[0] == ' ') {
-                write(new_fd, "Invalid command\n", 16);
+                write(new_fd, "Invalid command", 15);
                 reset_request(&req);
                 continue;
             }
@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
             // find read
             if (strlen(req.buffer) >= 6 && strncmp(req.buffer, "read ", 5) == 0) {
                 if (req.buffer[5] == ' ') {
-                    write(new_fd, "Invalid command\n", 16);
+                    write(new_fd, "Invalid command", 15);
                     reset_request(&req);
                     continue;
                 }
@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
                     }
                 }
                 if (flag == true) {
-                    write(new_fd, "Invalid command\n", 16);
+                    write(new_fd, "Invalid command", 15);
                     reset_request(&req);
                     continue;
                 }
@@ -129,22 +129,39 @@ int main(int argc, char** argv) {
             }
             // find update
             else if (strlen(req.buffer) >= 10 && strncmp(req.buffer, "update ", 7) == 0) {
-                char* idx_str = strtok(NULL, " ");
-                char* content = strtok(NULL, " ");
-                if (idx_str == NULL || content == NULL) {
-                    write(new_fd, "Invalid command\n", 16);
-                } else {
-                    int idx = atoi(idx_str);
-                    // handle_update_command(new_fd, idx, content);
+                if (req.buffer[7] == ' ') {
+                    write(new_fd, "Invalid command", 15);
+                    reset_request(&req);
+                    continue;
                 }
+                
+                char* idx_str = req.buffer + 7;
+                bool flag = false;
+                int i;
+                for (i = 0; idx_str[i] != '\0' && idx_str[i] != ' ' && !flag; i++) {
+                    if (!isdigit(idx_str[i])) {
+                        flag = true;
+                        break;
+                    }
+                }
+
+                char* content = &idx_str[i + 1];
+                if (flag == true || idx_str[i] == '\0' || content[0] == '\0') {
+                    write(new_fd, "Invalid command", 15);
+                    reset_request(&req);
+                    continue;
+                }
+                idx_str[i] = '\0';
+                
+                int idx = atoi(idx_str);
+                handle_update_command(new_fd, idx, content);
             }
             else if (strcmp(req.buffer, "exit") == 0) {
-                write(new_fd, "Bye!\n", 5);
                 close(new_fd);
                 break;
             }
             else {
-                write(new_fd, "Invalid command\n", 16);
+                write(new_fd, "Invalid command", 15);
             }
 
             reset_request(&req);
@@ -204,14 +221,15 @@ void handle_read_command(int client_fd, int idx) {
     int idx_fd = open("index", O_RDONLY);
     int note_fd = open("note.txt", O_RDONLY);
     if (idx_fd < 0 || note_fd < 0) {
-        write(client_fd, "Invalid command\n", 16);
+        write(client_fd, "Invalid command", 15);
         return;
     }
 
     unsigned char lengths[256];
     int n = read(idx_fd, lengths, sizeof(lengths));
+    char test_buffer[100];
     if (idx < 0 || idx >= n) {
-        write(client_fd, "Invalid command\n", 16);
+        write(client_fd, "Invalid command", 15);
         close(idx_fd);
         close(note_fd);
         return;
@@ -232,7 +250,7 @@ void handle_read_command(int client_fd, int idx) {
 
     // 回傳給 client
     write(client_fd, buf, len);
-    write(client_fd, "\n", 1);
+    // write(client_fd, "\n", 1);
 
     close(idx_fd);
     close(note_fd);
@@ -243,7 +261,7 @@ void handle_update_command(int client_fd, int idx, const char *content) {
     int idx_fd = open("index", O_RDWR);
     int note_fd = open("note.txt", O_RDWR);
     if (idx_fd < 0 || note_fd < 0) {
-        write(client_fd, "File open error\n", 16);
+        write(client_fd, "Invalid command", 15);
         return;
     }
 
@@ -251,7 +269,7 @@ void handle_update_command(int client_fd, int idx, const char *content) {
     int n = read(idx_fd, lengths, sizeof(lengths));
 
     if (idx < 0 || idx >= n || content[0] == '\0') {
-        write(client_fd, "Invalid command\n", 16);
+        write(client_fd, "Invalid command", 15);
         close(idx_fd);
         close(note_fd);
         return;
@@ -263,7 +281,7 @@ void handle_update_command(int client_fd, int idx, const char *content) {
         offset += lengths[i];
 
     // 讀出整個 note.txt
-    char note_buf[4096];
+    char note_buf[MESSAGE_SIZE * MESSAGE_SIZE + 1];
     lseek(note_fd, 0, SEEK_SET);
     int total = read(note_fd, note_buf, sizeof(note_buf));
 
@@ -272,9 +290,7 @@ void handle_update_command(int client_fd, int idx, const char *content) {
     if (new_len > MESSAGE_SIZE) new_len = MESSAGE_SIZE;
 
     // shift 後面內容
-    memmove(note_buf + offset + new_len,
-            note_buf + offset + old_len,
-            total - offset - old_len);
+    memmove(note_buf + offset + new_len, note_buf + offset + old_len, total - offset - old_len);
 
     // 插入新內容
     memcpy(note_buf + offset, content, new_len);
@@ -291,8 +307,6 @@ void handle_update_command(int client_fd, int idx, const char *content) {
     ftruncate(idx_fd, 0);
     lseek(idx_fd, 0, SEEK_SET);
     write(idx_fd, lengths, n);
-
-    write(client_fd, "Update OK\n", 10);
 
     close(note_fd);
     close(idx_fd);
