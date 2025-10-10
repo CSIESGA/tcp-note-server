@@ -6,6 +6,7 @@
 #define MESSAGE_SIZE 200
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #define ERR_EXIT(a) do { perror(a); exit(1); } while(0)
+#define MAX_CLIENTS 100
 
 // Section Request
 typedef struct {
@@ -15,6 +16,7 @@ typedef struct {
 
 int handle_read(int fd, request* reqP);
 void reset_request(request * reqP);
+void process_command(int new_fd, request* req);
 void handle_read_command(int client_fd, int idx);
 void handle_update_command(int client_fd, int idx, const char *content);
 

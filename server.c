@@ -51,7 +51,7 @@ int handle_read(int fd, request* reqP) {
     return 1;
 }
 
-void reset_request(request * reqP) {
+void reset_request(request* reqP) {
     reqP->length = 0;
     reqP->buffer[0] = '\0';
 }
@@ -63,116 +63,83 @@ int main(int argc, char** argv) {
         fprintf(stderr, "usage: %s [port]\n", argv[0]);
         exit(1);
     }
-
-    int listen_fd, new_fd;
-    struct sockaddr_in server_addr, client_addr;
-    socklen_t addrlen = sizeof(client_addr);
-    unsigned short port = (unsigned short) atoi(argv[1]);
-    char buffer[BUFFER_SIZE];
-
+    
     // Initialize server socket
-    listen_fd = init_server(port);
+    unsigned short port = (unsigned short) atoi(argv[1]);
+    int listen_fd = init_server(port);
     if (listen_fd < 0) {
         fprintf(stderr, "Failed to initialize server.\n");
         exit(EXIT_FAILURE);
     }
-
     printf("Server listening on port %d\n", port);
 
-    // Create one client
-    request req;
-    reset_request(&req);
-
-    // Blocking accept
-    new_fd = accept(listen_fd, (struct sockaddr*)&client_addr, &addrlen);
-    if (new_fd == -1) {
-        perror("accept");
+    struct pollfd fds[MAX_CLIENTS + 1];
+    request requests[MAX_CLIENTS + 1];
+    
+    for (int i = 0; i <= MAX_CLIENTS; i++) {
+        fds[i].fd = -1;
+        fds[i].events = POLLIN;
+        reset_request(&requests[i]);
     }
+    fds[0].fd = listen_fd;
+    fds[0].events = POLLIN;
+
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t addrlen = sizeof(client_addr);
 
     while (1) {
-        // Blocking read
-        int ret = handle_read(new_fd, &req);
-        if (ret > 0) {
-            printf("read from client: %s\n", req.buffer);
+        int ready = poll(fds, MAX_CLIENTS + 1, -1);
+        if (ready < 0) {
+            perror("poll");
+            break;
+        }
 
-            // parse command
-            if (req.buffer[0] == ' ') {
-                write(new_fd, "Invalid command", 15);
-                reset_request(&req);
+        if (fds[0].revents & POLLIN) {
+            int new_fd = accept(listen_fd, (struct sockaddr*)&client_addr, &addrlen);
+            if (new_fd == -1) {
+                perror("accept");
                 continue;
             }
 
-            // find read
-            if (strlen(req.buffer) >= 6 && strncmp(req.buffer, "read ", 5) == 0) {
-                if (req.buffer[5] == ' ') {
-                    write(new_fd, "Invalid command", 15);
-                    reset_request(&req);
-                    continue;
+            bool added = false;
+            for (int i = 1; i <= MAX_CLIENTS; i++) {
+                if (fds[i].fd == -1) {
+                    fds[i].fd = new_fd;
+                    fds[i].events = POLLIN;
+                    reset_request(&requests[i]);
+                    added = true;
+                    break;
                 }
-
-                bool flag = false;
-                char* idx_str = req.buffer + 5;
-                for (int i = 0; idx_str[i] != '\0' && !flag; i++) {
-                    if (!isdigit(idx_str[i])) {
-                        flag = true;
-                        break;
-                    }
-                }
-                if (flag == true) {
-                    write(new_fd, "Invalid command", 15);
-                    reset_request(&req);
-                    continue;
-                }
-
-                int idx = atoi(idx_str);
-                handle_read_command(new_fd, idx);
             }
-            // find update
-            else if (strlen(req.buffer) >= 10 && strncmp(req.buffer, "update ", 7) == 0) {
-                if (req.buffer[7] == ' ') {
-                    write(new_fd, "Invalid command", 15);
-                    reset_request(&req);
-                    continue;
-                }
-                
-                char* idx_str = req.buffer + 7;
-                bool flag = false;
-                int i;
-                for (i = 0; idx_str[i] != '\0' && idx_str[i] != ' ' && !flag; i++) {
-                    if (!isdigit(idx_str[i])) {
-                        flag = true;
-                        break;
-                    }
-                }
-
-                char* content = &idx_str[i + 1];
-                if (flag == true || idx_str[i] == '\0' || content[0] == '\0') {
-                    write(new_fd, "Invalid command", 15);
-                    reset_request(&req);
-                    continue;
-                }
-                idx_str[i] = '\0';
-                
-                int idx = atoi(idx_str);
-                handle_update_command(new_fd, idx, content);
-            }
-            else if (strcmp(req.buffer, "exit") == 0) {
+            if (!added) {
+                printf("Too many clients, reject new connection\n");
                 close(new_fd);
-                break;
             }
-            else {
-                write(new_fd, "Invalid command", 15);
-            }
+        }
 
-            reset_request(&req);
-        } else {
-            // Close connection
-            printf("client disconnected\n");
-            close(new_fd);
-            break;
+        for (int i = 1; i <= MAX_CLIENTS; i++) {
+            int client_fd = fds[i].fd;
+            if (client_fd == -1) continue;
+
+            if (fds[i].revents & POLLIN) {
+                int ret = handle_read(client_fd, &requests[i]);
+                if (ret == 1) {
+                    process_command(client_fd, &requests[i]);
+                    reset_request(&requests[i]);
+                }
+                else if (ret == 2) {
+                    continue; // incomplete
+                } else {
+                    // Close connection
+                    printf("client disconnected\n");        
+                    close(client_fd);
+                    fds[i].fd = -1;
+                    reset_request(&requests[i]);
+                }
+            }
         }
     }
-
+    close(listen_fd);
     return 0;
 }
 
@@ -217,6 +184,83 @@ int init_server(unsigned short port) {
     return listen_fd;
 }
 
+void process_command(int new_fd, request* req) {
+    
+    printf("read from client: %s\n", req->buffer);
+
+    // parse command
+    if (req->buffer[0] == ' ') {
+        write(new_fd, "Invalid command", 15);
+        reset_request(req);
+        return;
+    }
+
+    // find read
+    if (strlen(req->buffer) >= 6 && strncmp(req->buffer, "read ", 5) == 0) {
+        if (req->buffer[5] == ' ') {
+            write(new_fd, "Invalid command", 15);
+            reset_request(req);
+            return;
+        }
+
+        bool flag = false;
+        char* idx_str = req->buffer + 5;
+        for (int i = 0; idx_str[i] != '\0' && !flag; i++) {
+            if (!isdigit(idx_str[i])) {
+                flag = true;
+                break;
+            }
+        }
+        if (flag == true) {
+            write(new_fd, "Invalid command", 15);
+            reset_request(req);
+            return;
+        }
+
+        int idx = atoi(idx_str);
+        handle_read_command(new_fd, idx);
+    }
+    // find update
+    else if (strlen(req->buffer) >= 10 && strncmp(req->buffer, "update ", 7) == 0) {
+        if (req->buffer[7] == ' ') {
+            write(new_fd, "Invalid command", 15);
+            reset_request(req);
+            return;
+        }
+        
+        char* idx_str = req->buffer + 7;
+        bool flag = false;
+        int i;
+        for (i = 0; idx_str[i] != '\0' && idx_str[i] != ' ' && !flag; i++) {
+            if (!isdigit(idx_str[i])) {
+                flag = true;
+                break;
+            }
+        }
+
+        char* content = &idx_str[i + 1];
+        if (flag == true || idx_str[i] == '\0' || content[0] == '\0') {
+            write(new_fd, "Invalid command", 15);
+            reset_request(req);
+            return;
+        }
+        idx_str[i] = '\0';
+        
+        int idx = atoi(idx_str);
+        handle_update_command(new_fd, idx, content);
+    }
+    else if (strcmp(req->buffer, "exit") == 0) {
+        close(new_fd);
+    }
+    else {
+        write(new_fd, "Invalid command", 15);
+        reset_request(req);
+        return;
+    }
+
+    reset_request(req);
+}
+
 void handle_read_command(int client_fd, int idx) {
     int idx_fd = open("index", O_RDONLY);
     int note_fd = open("note.txt", O_RDONLY);
@@ -255,7 +299,6 @@ void handle_read_command(int client_fd, int idx) {
     close(idx_fd);
     close(note_fd);
 }
-
 
 void handle_update_command(int client_fd, int idx, const char *content) {
     int idx_fd = open("index", O_RDWR);
