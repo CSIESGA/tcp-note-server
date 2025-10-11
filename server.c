@@ -21,33 +21,35 @@ int handle_read(int fd, request* reqP) {
      *     -1: read failed
      *      0: EOF (client down)
      *      1: read successfully
+     *      2: incomplete message
      */
-    int r;
-    char buf[BUFFER_SIZE];
-    size_t len;
-
+    char buf[BUFFER_SIZE * BUFFER_SIZE];
     memset(buf, 0, sizeof(buf));
 
     // Read in request from client
-    r = read(fd, buf, sizeof(buf));
+    size_t r = read(fd, buf, sizeof(buf));
     if (r < 0) return -1;
-    if (r == 0) return 0;
-    char* p1 = strstr(buf, "\015\012"); // \r\n
-    if (p1 == NULL) {
-        p1 = strstr(buf, "\012");   // \n
-        if (p1 == NULL) {
-            if (!strncmp(buf, IAC_IP, 2)) {
-                // Client presses ctrl+C, regard as disconnection
-                // fprintf(stderr, "Client presses ctrl+C....\n");
-                return 0;
-            }
-        }
-    }
+    // Client presses ctrl+C, regard as disconnection
+    // fprintf(stderr, "Client presses ctrl+C....\n");
+    if (r == 0 || !strncmp(buf, IAC_IP, 2)) return 0;
+    buf[r] = '\0';
 
-    len = min(p1 - buf, BUFFER_SIZE - reqP->length - 1); // with padding
+    bool flag = false;
+    char* p1 = strstr(buf, "\015\012"); // \r\n
+    if (p1 == NULL) p1 = strstr(buf, "\012");   // \n
+    if (p1 == NULL) flag = true; // return 2
+
+    size_t len;
+    if (p1 == NULL) {
+        len = min(r, BUFFER_SIZE - 1 - reqP->length); // with padding
+    } else {
+        len = min(p1 - buf, BUFFER_SIZE - 1 - reqP->length); // with padding
+    }
+    
     memmove(reqP->buffer + reqP->length, buf, len);
     reqP->length += len;
     reqP->buffer[reqP->length] = '\0';
+    if (flag) return 2;
     return 1;
 }
 
@@ -124,10 +126,10 @@ int main(int argc, char** argv) {
             if (fds[i].revents & POLLIN) {
                 int ret = handle_read(client_fd, &requests[i]);
                 if (ret == 1) {
-                    process_command(client_fd, &requests[i]);
+                    process_command(client_fd, &requests[i], &fds[i]);
                     reset_request(&requests[i]);
-                }
-                else if (ret == 2) {
+                } else if (ret == 2) {
+                    // &&&&&&&
                     continue; // incomplete
                 } else {
                     // Close connection
@@ -184,7 +186,7 @@ int init_server(unsigned short port) {
     return listen_fd;
 }
 
-void process_command(int new_fd, request* req) {
+void process_command(int new_fd, request* req, struct pollfd* fds) {
     
     printf("read from client: %s\n", req->buffer);
 
@@ -244,13 +246,23 @@ void process_command(int new_fd, request* req) {
             reset_request(req);
             return;
         }
+
         idx_str[i] = '\0';
-        
         int idx = atoi(idx_str);
+        int count = 0;
+        while (content[count] != '\0' && count < 200) {
+            count++;
+        }
+        content[count] = '\0';
+
         handle_update_command(new_fd, idx, content);
     }
-    else if (strcmp(req->buffer, "exit") == 0) {
+    else if (strlen(req->buffer) == 4 && strncmp(req->buffer, "exit", 4) == 0) {
+        printf("client disconnected\n");        
         close(new_fd);
+        fds->fd = -1;
+        reset_request(req);
+        return;
     }
     else {
         write(new_fd, "Invalid command", 15);
@@ -264,14 +276,11 @@ void process_command(int new_fd, request* req) {
 void handle_read_command(int client_fd, int idx) {
     int idx_fd = open("index", O_RDONLY);
     int note_fd = open("note.txt", O_RDONLY);
-    if (idx_fd < 0 || note_fd < 0) {
-        write(client_fd, "Invalid command", 15);
-        return;
-    }
-
-    unsigned char lengths[256];
+    if (idx_fd < 0 || note_fd < 0) return;
+    
+    unsigned char lengths[BUFFER_SIZE];
     int n = read(idx_fd, lengths, sizeof(lengths));
-    char test_buffer[100];
+
     if (idx < 0 || idx >= n) {
         write(client_fd, "Invalid command", 15);
         close(idx_fd);
@@ -294,21 +303,17 @@ void handle_read_command(int client_fd, int idx) {
 
     // 回傳給 client
     write(client_fd, buf, len);
-    // write(client_fd, "\n", 1);
 
     close(idx_fd);
     close(note_fd);
 }
 
-void handle_update_command(int client_fd, int idx, const char *content) {
+void handle_update_command(int client_fd, int idx, const char* content) {
     int idx_fd = open("index", O_RDWR);
     int note_fd = open("note.txt", O_RDWR);
-    if (idx_fd < 0 || note_fd < 0) {
-        write(client_fd, "Invalid command", 15);
-        return;
-    }
-
-    unsigned char lengths[256];
+    if (idx_fd < 0 || note_fd < 0) return;
+    
+    unsigned char lengths[BUFFER_SIZE];
     int n = read(idx_fd, lengths, sizeof(lengths));
 
     if (idx < 0 || idx >= n || content[0] == '\0') {
