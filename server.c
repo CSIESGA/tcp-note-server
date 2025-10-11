@@ -129,7 +129,6 @@ int main(int argc, char** argv) {
                     process_command(client_fd, &requests[i], &fds[i]);
                     reset_request(&requests[i]);
                 } else if (ret == 2) {
-                    // &&&&&&&
                     continue; // incomplete
                 } else {
                     // Close connection
@@ -293,17 +292,23 @@ void handle_read_command(int client_fd, int idx) {
     for (int i = 0; i < idx; i++) {
         offset += lengths[i];
     }
+    int len = lengths[idx];
+
+    // 加讀鎖 
+    lock_read_range(note_fd, offset, len);  
 
     // 讀取該段內容
     char buf[MESSAGE_SIZE + 1];
     lseek(note_fd, offset, SEEK_SET);
-    int len = lengths[idx];
     read(note_fd, buf, len);
     buf[len] = '\0';
 
     // 回傳給 client
     write(client_fd, buf, len);
-
+    
+    // 解鎖
+    unlock_range(note_fd, offset, len);
+    
     close(idx_fd);
     close(note_fd);
 }
@@ -327,15 +332,18 @@ void handle_update_command(int client_fd, int idx, const char* content) {
     off_t offset = 0;
     for (int i = 0; i < idx; i++)
         offset += lengths[i];
+    
+    int old_len = lengths[idx];
+    int new_len = strlen(content);
+    if (new_len > MESSAGE_SIZE) new_len = MESSAGE_SIZE;
+
+    int len = (new_len == old_len) ? old_len : 0; // 0 -> EOF
+    lock_write_range(note_fd, offset, len);
 
     // 讀出整個 note.txt
     char note_buf[MESSAGE_SIZE * MESSAGE_SIZE + 1];
     lseek(note_fd, 0, SEEK_SET);
     int total = read(note_fd, note_buf, sizeof(note_buf));
-
-    int old_len = lengths[idx];
-    int new_len = strlen(content);
-    if (new_len > MESSAGE_SIZE) new_len = MESSAGE_SIZE;
 
     // shift 後面內容
     memmove(note_buf + offset + new_len, note_buf + offset + old_len, total - offset - old_len);
@@ -351,11 +359,46 @@ void handle_update_command(int client_fd, int idx, const char* content) {
     lseek(note_fd, 0, SEEK_SET);
     write(note_fd, note_buf, total - old_len + new_len);
 
+    lock_write_range(idx_fd, 0, 0);
+
     // 重寫 index
     ftruncate(idx_fd, 0);
     lseek(idx_fd, 0, SEEK_SET);
     write(idx_fd, lengths, n);
 
+    unlock_range(idx_fd, 0, 0);
+    unlock_range(note_fd, offset, len);
+
     close(note_fd);
     close(idx_fd);
+}
+
+void lock_region(int fd, short type, off_t start, off_t len) {
+    struct flock lock;
+    lock.l_type = type;
+    lock.l_whence = SEEK_SET;
+    lock.l_start = start;
+    lock.l_len = len; // 0 表示到檔尾
+    fcntl(fd, F_SETLKW, &lock); // blocking
+}
+
+void unlock_region(int fd, off_t start, off_t len) {
+    struct flock lock;
+    lock.l_type = F_UNLCK;
+    lock.l_whence = SEEK_SET;
+    lock.l_start = start;
+    lock.l_len = len;
+    fcntl(fd, F_SETLK, &lock);
+}
+
+void lock_read_range(int fd, off_t start, off_t len) {
+    lock_region(fd, F_RDLCK, start, len);
+}
+
+void lock_write_range(int fd, off_t start, off_t len) {
+    lock_region(fd, F_WRLCK, start, len);
+}
+
+void unlock_range(int fd, off_t start, off_t len) {
+    unlock_region(fd, start, len);
 }
