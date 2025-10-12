@@ -22,12 +22,12 @@ int handle_read(int fd, request* reqP) {
      *      0: EOF (client down)
      *      1: read successfully
      *      2: incomplete message
-     */
-    char buf[BUFFER_SIZE * BUFFER_SIZE];
+     */ 
+    char buf[10 * BUFFER_SIZE * BUFFER_SIZE];
     memset(buf, 0, sizeof(buf));
 
     // Read in request from client
-    size_t r = read(fd, buf, sizeof(buf));
+    ssize_t r = read(fd, buf, sizeof(buf) - 1);
     if (r < 0) return -1;
     // Client presses ctrl+C, regard as disconnection
     // fprintf(stderr, "Client presses ctrl+C....\n");
@@ -277,6 +277,8 @@ void handle_read_command(int client_fd, int idx) {
     int note_fd = open("note.txt", O_RDONLY);
     if (idx_fd < 0 || note_fd < 0) return;
     
+    lock_read_range(idx_fd, idx, 0);
+
     unsigned char lengths[BUFFER_SIZE];
     int n = read(idx_fd, lengths, sizeof(lengths));
 
@@ -296,6 +298,7 @@ void handle_read_command(int client_fd, int idx) {
 
     // 加讀鎖 
     lock_read_range(note_fd, offset, len);  
+    unlock_range(idx_fd, idx, 0);
 
     // 讀取該段內容
     char buf[MESSAGE_SIZE + 1];
