@@ -1,16 +1,14 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/KwN3W4uF)
-## SP2025_HW1_release
+# TCP Note Server
 
-### Spec
-[HackMD](https://hackmd.io/@yylunxie/ryRU77Bill)
+A TCP server written in C that lets multiple clients read and update notes stored on disk. The server uses `poll()` to handle client connections in a single event loop and `fcntl()` byte-range locks to coordinate access to the note files.
 
-### Public Judge
-###### Usage
+## Build and run
+
+From the repository root on Linux with GCC and Make installed:
+
+```sh
+make
+./server 8080
 ```
-python3 public_checker.py
-```
-###### Argument
 
-- `-t TASK [TASK ...]`, `--task TASK [TASK ...]`, Specify which tasks you want to run. If you didn't set this argument, `checker.py` will run all tasks by default.
-    - Valid TASK are "exit", "single_read", "single_update", "invalid".
-    - for example `python3 checker.py --task exit single_read` will run both `exit` and `single_read`
+The repository includes a Python public checker and sample test cases.
